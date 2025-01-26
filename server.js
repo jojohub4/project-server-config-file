@@ -68,14 +68,22 @@ app.post('/api/login', (req, res) => {
 app.post('/api/attendance/record', (req, res) => {
     const { registration_no, email, firstName, unitCode, unitName, action, timestamp } = req.body;
 
-    const date = new Date(parseInt(timestamp,10));
-    const offset = date.getTimezoneOffset() * 60000;
-    const localDate = new Date(date.getTime() -offset + 3 * 3600000);
-    const formattedTimestamp = localDate.toISOString().slice(0, 19).replace('T', ' ');
+    // Convert the provided timestamp to date and time
+    const date = new Date(parseInt(timestamp, 10));
+    const offset = date.getTimezoneOffset() * 60000; // Adjust for timezone offset
+    const localDate = new Date(date.getTime() - offset + 3 * 3600000); // Add timezone offset (if necessary)
+    
+    // Extract the date and time separately
+    const formattedDate = localDate.toISOString().split('T')[0]; // e.g., '2025-01-25'
+    const formattedTime = localDate.toISOString().split('T')[1].split('.')[0]; // e.g., '08:00:00'
 
-    const query = 'INSERT INTO attendance (registration_no, email, firstName, unitCode, unitName, action, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)';
+    // Update the query for the separate date and time columns
+    const query = `
+        INSERT INTO attendance (registration_no, email, firstName, unitCode, unitName, action, date, time) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
 
-    connection.query(query, [registration_no, email, firstName, unitCode, unitName, action, formattedTimestamp], (err, result) => {
+    connection.query(query, [registration_no, email, firstName, unitCode, unitName, action, formattedDate, formattedTime], (err, result) => {
         if (err) {
             console.error('Error saving attendance record:', err);
             return res.status(500).json({ success: false, message: 'Failed to record attendance' });
@@ -83,82 +91,42 @@ app.post('/api/attendance/record', (req, res) => {
         res.status(200).json({ success: true, message: 'Attendance recorded successfully' });
     });
 });
+
 //get attendance logs
 app.get('/api/attendance/logs', (req, res) => {
     const query = `
         SELECT 
             registration_no, 
             email, 
-            first_name, 
+            firstName, 
             unitCode, 
             unitName, 
-            MAX(CASE WHEN action = 'in' THEN timestamp END) As punchInTime,
-            MAX(CASE WHEN action = 'out' THEN timestamp END) As punchOutTime,
+            MAX(CASE WHEN action = 'in' THEN CONCAT(date, 'T', time) END) AS punchInTime,
+            MAX(CASE WHEN action = 'out' THEN CONCAT(date, 'T', time) END) AS punchOutTime
         FROM attendance
-        GROUP BY registratio_no, email, firt_name, unitCode, unitName
+        GROUP BY registration_no, email, firstName, unitCode, unitName
     `;
 
     connection.query(query, (err, results) => {
         if (err) {
             console.error('Error fetching attendance logs:', err);
-            return res.status(500).json({ success: false, message: 'Failed to fetch attendance logs' });
+            return res.status(500).json({ message: 'Failed to fetch attendance logs' });
         }
 
-        // add a fallback for missing or invalid fields
-        const sanitizedResults = results.map((log) =>{
-            if (!log.punchInTime || !log.punchOutTime){
-                log.punchInTime = 'N/A';
-                log.punchOutTime = 'N/A';
-            }
-            return log;
-        });
+        const sanitizedResults = results.map(log => ({
+            registration_no: log.registration_no,
+            email: log.email,
+            firstName: log.firstName,
+            unitCode: log.unitCode,
+            unitName: log.unitName,
+            punchInTime: log.punchInTime || "N/A",
+            punchOutTime: log.punchOutTime || "N/A"
+        }));
 
-        res.status(200).json(sanitizedResults);
-        
-        const logs = [];
-        const logMap = {};
-
-        // Process logs to group them by `registration_no`, `unitCode`, and `unitName`
-        results.forEach(log => {
-            const key = `${log.registration_no}-${log.unitCode}-${log.unitName}`;
-            if (!logMap[key]) {
-                logMap[key] = { 
-                    date: log.punchTime.split('T')[0], 
-                    registration_no: log.registration_no, 
-                    email: log.email, 
-                    firstName: log.firstName, 
-                    unitCode: log.unitCode, 
-                    unitName: log.unitName, 
-                    punchInTime: null, 
-                    punchOutTime: null 
-                };
-                logs.push(logMap[key]);
-            }
-            
-            if (log.action === 'in') {
-                logMap[key].punchInTime = log.punchTime;
-            } else if (log.action === 'out') {
-                logMap[key].punchOutTime = log.punchTime;
-            }
-        });
-
-        // Calculate duration and status
-        logs.forEach(log => {
-            if (log.punchInTime && log.punchOutTime) {
-                const punchIn = new Date(log.punchInTime);
-                const punchOut = new Date(log.punchOutTime);
-                const durationMinutes = Math.round((punchOut - punchIn) / 60000); // Convert ms to minutes
-                log.duration = `${Math.floor(durationMinutes / 60)} hrs ${durationMinutes % 60} mins`;
-                log.status = durationMinutes >= 90 ? 'Present' : 'Late';
-            } else {
-                log.duration = 'Incomplete';
-                log.status = 'Incomplete';
-            }
-        });
-
-        res.status(200).json({ success: true, logs });
+        res.status(200).json(sanitizedResults); // Return the array directly
     });
 });
+
 //start server
 app.listen(PORT, '0.0.0.0', () => {
     console.log('server running on http://0.0.0.0:${PORT}');

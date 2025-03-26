@@ -1,7 +1,7 @@
 const app = require('express')();
 const mysql = require(mysql2);
 const bodyParser = require('body-parser');
-const { error } = require('console');
+const nodemailer = require(nodemailer);
 const cors = require('cors');
 
 const PORT =3000;
@@ -15,7 +15,7 @@ const connection = mysql.createConnection({
     user: 'root', // Replace with your MySQL username
     password: 'password', // Replace with your MySQL password
     database: 'database' //replace with database name 
-})
+});
 //connection checking
 connection.connect(err => {
     if (err) {
@@ -77,7 +77,7 @@ app.post('/api/login', (req, res) => {
 
         } else if (user.role === 'lecturer') {
                         const lecturerQuery = `
-                SELECT c.unit_code, c.unit_name 
+                SELECT lu.unit_code, lu.unit_name 
                 FROM lecturer_units lu
                 JOIN courses c ON lu.unit_code = c.unit_code
                 WHERE lu.lecturer_email = ?;
@@ -92,7 +92,13 @@ app.post('/api/login', (req, res) => {
                 return res.json(response);
             });
 
-        } else {
+        }else if (user.role === 'admin'){
+            response.admin_email = email;
+            response.adminReg_no = registration_no;
+            response.admin_name = user.first_name;
+            console.log('admin log in detected: ${user.firstname}');
+            return res.json(response);
+        }else {
             return res.status(400).json({ success: false, error: 'Invalid user role' });
         }
     });
@@ -147,7 +153,26 @@ app.get('/api/attendance/logs', (req, res) => {
     const formattedFromDate = fromDate.trim();
     const formattedToDate = toDate.trim();
 
-    const query = `SELECT * FROM attendance WHERE registration_no =? AND date BETWEEN ? AND ?`;
+    const query = `
+            SELECT 
+            date, 
+            unitCode, 
+            unitName, 
+            MAX(CASE WHEN action = 'in' THEN time END) AS punchInTime, 
+            MAX(CASE WHEN action = 'out' THEN time END) AS punchOutTime,
+            TIMEDIFF(
+                MAX(CASE WHEN action = 'out' THEN time END),
+                MAX(CASE WHEN action = 'in' THEN time END)
+            ) AS duration,
+            (CASE 
+                WHEN MAX(CASE WHEN action = 'in' THEN time END) IS NOT NULL THEN 'Present'
+                ELSE 'Absent'
+            END) AS status
+        FROM attendance
+        WHERE registration_no = ? 
+        AND date BETWEEN ? AND ?
+        GROUP BY date, unitCode, unitName;
+        `;
     connection.query(query, [registration_no, formattedFromDate, formattedToDate], (err, results) => {
         if (err) {
             console.error('database error', err);
@@ -156,7 +181,7 @@ app.get('/api/attendance/logs', (req, res) => {
 
         console.log('returning attendance logs:', results.length);
         res.json({success:true, logs: results.length > 0 ? results : []});
-    })
+    });
 });
 
 app.get('/api/lecturer/units',(req, res) => {
@@ -181,83 +206,140 @@ app.get('/api/lecturer/units',(req, res) => {
         }
         console.log('found units for  ${email}:', results);
         return res.json({success: true, units: results});
-    })
-})
-app.get('/api/lecturer/attendance', (req, res) => {
-    const { unitCode, unitName } = req.query;
-
-    if (!unitCode || !unitName) {
-        return res.status(400).json({ success: false, error: 'Missing unitCode or unitName' });
-    }
-
-    const query = `
-        SELECT 
-            COUNT(CASE WHEN a.status = 'present' THEN 1 END) AS present_students,
-            COUNT(CASE WHEN a.status = 'absent' THEN 1 END) AS absent_students,
-            (SELECT COUNT(*) FROM users WHERE course = (
-                SELECT course_name FROM courses WHERE unit_code = ? AND unit_name = ?
-            )) AS total_students
-        FROM attendance a
-        WHERE a.unit_code = ? AND a.unit_name = ?;
-    `;
-
-    const studentListQuery = `
-        SELECT u.first_name, u.second_name, a.status 
-        FROM users u
-        LEFT JOIN attendance a ON u.registration_no = a.student_reg_no 
-        WHERE a.unit_code = ? AND a.unit_name = ?;
-    `;
-
-    connection.query(query, [unitCode, unitName, unitCode, unitName], (err, summaryResults) => {
-        if (err) {
-            console.error("Database query error:", err.message);
-            return res.status(500).json({ success: false, error: "Database query error" });
-        }
-
-        connection.query(studentListQuery, [unitCode, unitName], (err, studentResults) => {
-            if (err) {
-                console.error("Student query error:", err.message);
-                return res.status(500).json({ success: false, error: "Database query error" });
-            }
-
-            const attendance = summaryResults[0] || { present_students: 0, absent_students: 0, total_students: 0 };
-            return res.json({
-                success: true,
-                unitCode,
-                unitName,
-                presentStudents: attendance.present_students || 0,
-                absentStudents: attendance.absent_students || 0,
-                totalStudents: attendance.total_students || 0,
-                students: studentResults || [] // List of students with their attendance status
-            });
-        });
     });
 });
 
-app.post('/api/lecturer/clock', (req, res) => {
-    const { registration_no, email, first_name, action, timestamp } = req.body; // 🟢 Use firstName
+app.post('/api/clocking', (req, res) => {
+    const { registration_no, email, first_name, action, timestamp } = req.body;
 
-    console.log("Incoming request:", req.body); // Debugging log
+    console.log("Clocking request received:", req.body); // Debugging log
 
-    if (!registration_no || !email || !first_name || !action || !timestamp) {
+    if (!registration_no || !email || !first_name || !action || !timestamp ) {
         return res.status(400).json({ success: false, message: "Missing required fields" });
     }
+
+    console.log ('converting timestamp:', timestamp);
+    const date = new Date(parseInt(timestamp, 10));
+    const offset = date.getTimezoneOffset() * 60000; // Adjust for timezone offset
+    const localDate = new Date(date.getTime() - offset + 3 * 3600000); // Add timezone offset (if necessary)
+
+    const formattedDate = localDate.toISOString().split('T')[0]; // e.g., '2025-01-25'
+    const formattedTime = localDate.toISOString().split('T')[1].split('.')[0]; // e.g., '08:00:00'
 
     const query = `
         INSERT INTO lecturer_clocking (registration_no, email, first_name, action, date, time) 
         VALUES (?, ?, ?, ?, ?, ?)
     `;
 
+    console.log('executing query:', query);
+
     connection.query(query, [registration_no, email, first_name, action, formattedDate, formattedTime], (err, result) => {
         if (err) {
             console.error("Error saving lecturer clocking:", err);
-            return res.status(500).json({ success: false, message: "Failed to record lecturer clocking" });
+            return res.status(500).json({ success: false, message: "Failed to record clocking" });
         }
-        res.status(200).json({ success: true, message: "Lecturer clocking recorded successfully" });
+        res.status(200).json({ success: true, message: "Clocking recorded successfully" });
     });
 });
 
+app.get('/api/lecturer/attendance', (req, res) => {
+    const { email, fromDate, toDate } = req.query;  // Get lecturer email & date range from query params
 
+    if (!email || !fromDate || !toDate) {
+        return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const query = `
+        SELECT lecturer_email, registration_no, first_name, action, date, time
+        FROM lecturer_clocking
+        WHERE lecturer_email = ? AND date BETWEEN ? AND ?
+        ORDER BY date DESC, time DESC
+    `;
+
+    connection.query(query, [email, fromDate, toDate], (err, results) => {
+        if (err) {
+            console.error("Error fetching lecturer attendance:", err);
+            return res.status(500).json({ success: false, message: "Database error" });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ success: false, message: "No records found" });
+        }
+
+        res.json({ success: true, logs: results });
+    });
+});
+
+app.post('/api/admin/clock', (req, res) => {
+    const { registration_no, email, first_name, action, timestamp } = req.body;
+
+    console.log("Clocking request received:", req.body); // Debugging log
+
+    if (!registration_no || !email || !first_name || !action || !timestamp ) {
+        return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const formattedDate = dateObj.toISOString().split('T')[0];
+    const formattedTime = dateObj.toISOString().split('T')[1].split('.')[0];
+
+    const query = `
+        INSERT INTO admin_clocking (registration_no, email, first_name, action, date, time) 
+        VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    connection.query(query, [registration_no, email, first_name, action, formattedDate, formattedTime], (err, result) => {
+        if (err) {
+            console.error("Error saving admin clocking:", err);
+            return res.status(500).json({ success: false, message: "Failed to record clocking" });
+        }
+        res.status(200).json({ success: true, message: "Clocking recorded successfully" });
+    });
+});
+
+app.get('/api/admin/attendance', (req, res) => {
+    const { email, registration_no, fromDate, toDate } = req.query;  // Get lecturer email & date range from query params
+
+    if (!email || !registration_no || !fromDate || !toDate) {
+        return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const query = `
+        SELECT * FROM admin_clocking
+        WHERE email = ? AND registration_no = ? AND date BETWEEN ? AND ?
+        ORDER BY date DESC, time DESC
+    `;
+
+    connection.query(query, [email, registration_no, fromDate, toDate], (err, results) => {
+        if (err) {
+            console.error("Error fetching admin attendance:", err);
+            return res.status(500).json({ success: false, message: "failed to retrieve records" });
+        }
+
+        res.status(200).json({ success: true, logs: results});
+    });
+});
+
+app.post('/api/support', async (req, res) => {
+    const {userEmail, userName, issue} = req.body;
+
+    if (!userEmail || !userName || !issue) {
+        return res.status(400).json({success: false, message: 'missing fields'});
+    }
+
+    const mailOptions = {
+        from: userEmail,
+        to: 'developeremail@gmail.com',
+        subject: `support request from ${userName}`,
+        text: `user: ${userName}\nEmail: ${userEmail}\n\nIssue Description:\n${issue}`
+    };
+
+    try {
+        await WebTransportError.sendMail(mailOptions);
+        res.status(200).json({success: true, message: 'support request sent successfully'});
+    } catch (error) {
+        res.status(500).json({success: false, message: 'failed to send email', error: error.message});
+    }
+});
 //start server
 app.listen(PORT, '0.0.0.0', () => {
     console.log('server running on http://0.0.0.0:${PORT}');

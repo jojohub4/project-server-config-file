@@ -1,0 +1,22 @@
+{
+  "name": "geotendy-server-configuration",
+  "version": "1.0.0",
+  "description": "\"# project-server-config-file\"",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jojohub4/project-server-config-file.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jojohub4/project-server-config-file/issues"
+  },
+  "homepage": "https://github.com/jojohub4/project-server-config-file#readme"
+}

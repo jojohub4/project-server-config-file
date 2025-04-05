@@ -10,12 +10,15 @@ app.use(cors());
 app.use(bodyParser.json());
 
 //mysql connection
+require('dotenv').config();
+
 const connection = mysql.createConnection({
-    host: 'localhost',
-    user: 'root', // Replace with your MySQL username
-    password: 'password', // Replace with your MySQL password
-    database: 'database' //replace with database name 
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
 });
+
 //connection checking
 connection.connect(err => {
     if (err) {

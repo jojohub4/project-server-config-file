@@ -18,5 +18,12 @@
   "bugs": {
     "url": "https://github.com/jojohub4/project-server-config-file/issues"
   },
-  "homepage": "https://github.com/jojohub4/project-server-config-file#readme"
+  "homepage": "https://github.com/jojohub4/project-server-config-file#readme",
+  "dependencies": {
+    "express": "^5.1.0",
+    "mysql2": "^3.14.0",
+    "body-parser": "^1.19.0",
+    "cors": "^2.8.5",
+    "dotenv": "^10.0.0"
+  }
 }

@@ -1,7 +1,7 @@
 const app = require('express')();
-const mysql2 = require(mysql2);
+const mysql2 = require('mysql2');
 const bodyParser = require('body-parser');
-const nodemailer = require(nodemailer);
+const nodemailer = require('nodemailer');
 const cors = require('cors');
 
 const PORT =3000;
